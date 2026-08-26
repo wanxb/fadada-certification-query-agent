@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "responses": {
+    "success-person": {
+      "evidenceStatus": "Succeeded",
+      "sourceEndpointKeys": ["get_account", "get_person_verification"],
+      "safeErrorCode": null
+    },
+    "success-company": {
+      "evidenceStatus": "Succeeded",
+      "sourceEndpointKeys": ["get_company", "get_company_verification"],
+      "safeErrorCode": null
+    },
+    "success-relationship": {
+      "evidenceStatus": "Succeeded",
+      "sourceEndpointKeys": ["get_account", "get_person_verification", "get_company", "get_company_verification"],
+      "safeErrorCode": null
+    },
+    "success-seals": {
+      "evidenceStatus": "Succeeded",
+      "sourceEndpointKeys": ["get_company", "get_company_verification", "get_seals", "get_seal_info"],
+      "safeErrorCode": null
+    },
+    "provider-timeout": {
+      "evidenceStatus": "Failed",
+      "sourceEndpointKeys": ["get_account"],
+      "safeErrorCode": "FDD_TIMEOUT"
+    }
+  }
+}

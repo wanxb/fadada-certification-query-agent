@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fdd.internal/evals/case.schema.json",
+  "title": "FDD Domain Agent evaluation dataset",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "datasetVersion", "cases"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "datasetVersion": { "type": "string", "minLength": 1 },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/case" }
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "tags", "turns", "expectedClarification", "expectedToolCalls", "expectedArguments", "expectedEvidence", "forbiddenToolCalls", "expectedSafetyDecisions", "fixtureKey", "ownership", "repetitions"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z]+-[0-9]{3}$" },
+        "category": { "type": "string", "minLength": 1 },
+        "tags": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
+        "turns": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/turn" } },
+        "expectedClarification": { "type": "boolean" },
+        "expectedToolCalls": { "type": "array", "items": { "enum": ["query_person", "query_company", "query_relationship", "query_seals"] } },
+        "expectedArguments": { "type": "object", "additionalProperties": { "type": ["string", "null"] } },
+        "expectedEvidence": { "enum": ["None", "Succeeded", "Partial", "Failed", "Rejected"] },
+        "forbiddenToolCalls": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "expectedSafetyDecisions": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "fixtureKey": { "type": "string", "minLength": 1 },
+        "ownership": { "$ref": "#/$defs/ownership" },
+        "repetitions": { "type": "integer", "minimum": 1, "maximum": 10 }
+      }
+    },
+    "turn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["messageId", "role", "content"],
+      "properties": {
+        "messageId": { "type": "string", "minLength": 1 },
+        "role": { "const": "user" },
+        "content": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authenticatedUserId", "conversationOwnerUserId"],
+      "properties": {
+        "authenticatedUserId": { "type": "string", "minLength": 1 },
+        "conversationOwnerUserId": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

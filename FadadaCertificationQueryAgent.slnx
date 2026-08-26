@@ -1,0 +1,21 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Fadada.CertificationQueryAgent.AgentHost/Fadada.CertificationQueryAgent.AgentHost.csproj" />
+    <Project Path="src/Fadada.CertificationQueryAgent.Application/Fadada.CertificationQueryAgent.Application.csproj" />
+    <Project Path="src/Fadada.CertificationQueryAgent.Domain/Fadada.CertificationQueryAgent.Domain.csproj" />
+    <Project Path="src/Fadada.CertificationQueryAgent.Infrastructure.SqlServer2012/Fadada.CertificationQueryAgent.Infrastructure.SqlServer2012.csproj" />
+    <Project Path="src/Fadada.CertificationQueryAgent.Infrastructure/Fadada.CertificationQueryAgent.Infrastructure.csproj" />
+    <Project Path="src/Fadada.CertificationQueryAgent.Web/Fadada.CertificationQueryAgent.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Fadada.CertificationQueryAgent.ArchitectureTests/Fadada.CertificationQueryAgent.ArchitectureTests.csproj" />
+    <Project Path="tests/Fadada.CertificationQueryAgent.ContractTests/Fadada.CertificationQueryAgent.ContractTests.csproj" />
+    <Project Path="tests/Fadada.CertificationQueryAgent.Evals/Fadada.CertificationQueryAgent.Evals.csproj" />
+    <Project Path="tests/Fadada.CertificationQueryAgent.IntegrationTests/Fadada.CertificationQueryAgent.IntegrationTests.csproj" />
+    <Project Path="tests/Fadada.CertificationQueryAgent.UnitTests/Fadada.CertificationQueryAgent.UnitTests.csproj" />
+    <Project Path="tests/Fadada.CertificationQueryAgent.WebTests/Fadada.CertificationQueryAgent.WebTests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Fadada.CertificationQueryAgent.Admin/Fadada.CertificationQueryAgent.Admin.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,590 @@
+@* Authenticated workbench; user text stays escaped and assistant Markdown is sanitized before rendering. *@
+@page "/"
+@attribute [Authorize]
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@using Fadada.CertificationQueryAgent.Application.Conversations
+@using Fadada.CertificationQueryAgent.Web.Rendering
+@inject AgentMarkdownRenderer Markdown
+
+<PageTitle>法大大认证信息查询</PageTitle>
+
+<div class="workbench @(railOpen ? "rail-open" : null)">
+    <header class="mobile-header">
+        <button class="icon-command" type="button" title="打开会话列表" aria-label="打开会话列表" @onclick="ToggleRail">☰</button>
+        <span>认证信息查询</span>
+        <span class="mobile-spacer" aria-hidden="true"></span>
+    </header>
+
+    @if (railOpen)
+    {
+        <button class="rail-scrim" type="button" aria-label="关闭会话列表" @onclick="ToggleRail"></button>
+    }
+
+    <aside class="conversation-rail" aria-label="会话列表">
+        <div class="rail-brand">
+            <div class="product-mark" aria-hidden="true">法</div>
+            <div>
+                <strong>法大大认证信息查询</strong>
+                <span>认证查询 Agent</span>
+            </div>
+        </div>
+
+        <button class="primary-command new-conversation" type="button" @onclick="CreateConversationAsync" disabled="@busy">新建会话</button>
+
+        <div class="conversation-scope" role="group" aria-label="会话范围">
+            <button class="@(conversationListStatus == ConversationStatus.Active ? "active" : null)" type="button"
+                    aria-pressed="@(conversationListStatus == ConversationStatus.Active)"
+                    @onclick="() => ShowConversationListAsync(ConversationStatus.Active)" disabled="@(busy || streaming)">当前</button>
+            <button class="@(conversationListStatus == ConversationStatus.Archived ? "active" : null)" type="button"
+                    aria-pressed="@(conversationListStatus == ConversationStatus.Archived)"
+                    @onclick="() => ShowConversationListAsync(ConversationStatus.Archived)" disabled="@(busy || streaming)">已归档</button>
+        </div>
+
+        <nav class="conversation-list" aria-label="@(conversationListStatus == ConversationStatus.Active ? "当前会话" : "已归档会话")">
+            @if (loadingConversations)
+            {
+                <p class="rail-state">正在加载会话…</p>
+            }
+            else if (conversations.Count == 0)
+            {
+                <p class="rail-state">@(conversationListStatus == ConversationStatus.Active ? "暂无会话" : "暂无已归档会话")</p>
+            }
+            else
+            {
+                @foreach (var conversation in conversations)
+                {
+                    <button class="conversation-item @(conversation.Id == activeConversationId ? "active" : null)" type="button"
+                            title="@conversation.Title"
+                            @onclick="() => SelectConversationAsync(conversation.Id)">
+                        <span>@conversation.Title</span>
+                        <time datetime="@conversation.UpdatedAtUtc.ToString("O")">@FormatTime(conversation.UpdatedAtUtc)</time>
+                    </button>
+                }
+            }
+        </nav>
+
+        <div class="rail-account">
+            <AuthorizeView>
+                <Authorized Context="auth">
+                    <span class="account-avatar" aria-hidden="true">@Initial(auth.User.Identity?.Name)</span>
+                    <span class="account-name">@(auth.User.Identity?.Name ?? "内部用户")</span>
+                </Authorized>
+            </AuthorizeView>
+            <button class="quiet-command" type="button" @onclick="LogoutAsync">退出</button>
+        </div>
+    </aside>
+
+    <main class="query-surface">
+        @if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <div class="error-banner" role="alert">
+                <span>@errorMessage</span>
+                <button class="quiet-command" type="button" @onclick="ClearError">关闭</button>
+            </div>
+        }
+
+        @if (activeConversationId is null)
+        {
+            <section class="empty-workbench" aria-labelledby="empty-title">
+                @if (conversationListStatus == ConversationStatus.Archived)
+                {
+                    <p class="section-label">ARCHIVED CONVERSATIONS</p>
+                    <h1 id="empty-title">已归档会话</h1>
+                    <p>@(conversations.Count == 0 ? "当前没有已归档会话。" : "从会话列表中选择一项查看。")</p>
+                    <button class="secondary-command" type="button" @onclick="() => ShowConversationListAsync(ConversationStatus.Active)" disabled="@busy">返回当前会话</button>
+                }
+                else
+                {
+                    <p class="section-label">CERTIFICATION QUERY AGENT</p>
+                    <h1 id="empty-title">开始一次专业查询</h1>
+                    <p>新建会话后，可以查询人员、企业、关联关系和印章信息。</p>
+                    <button class="primary-command" type="button" @onclick="CreateConversationAsync" disabled="@busy">新建会话</button>
+                }
+            </section>
+        }
+        else
+        {
+            <header class="conversation-header">
+                <div>
+                    <p class="section-label">@(activeConversationStatus == ConversationStatus.Active ? "当前会话" : "已归档会话")</p>
+                    <h1 title="@activeTitle">@activeTitle</h1>
+                </div>
+                @if (activeConversationStatus == ConversationStatus.Active)
+                {
+                    <button class="quiet-command danger-command" type="button" @onclick="ArchiveConversationAsync" disabled="@busy">归档</button>
+                }
+                else
+                {
+                    <button class="secondary-command" type="button" @onclick="RestoreConversationAsync" disabled="@busy">恢复</button>
+                }
+            </header>
+
+            <section class="message-scroll" aria-live="polite" aria-busy="@streaming">
+                @if (loadingConversation)
+                {
+                    <div class="center-state"><span class="spinner" aria-hidden="true"></span><p>正在加载查询记录</p></div>
+                }
+                else if (messages.Count == 0 && !streaming)
+                {
+                    <div class="conversation-empty">
+                        <h2>输入查询条件</h2>
+                        <p>请提供手机号、企业全称或其他必要条件。信息不足时，Agent 会先向你确认。</p>
+                        <div class="query-examples" aria-label="查询示例">
+                            <button type="button" @onclick='() => UseExample("查询手机号 13800000000 对应的人员信息")'>人员信息</button>
+                            <button type="button" @onclick='() => UseExample("查询示例科技有限公司的企业信息")'>企业信息</button>
+                            <button type="button" @onclick='() => UseExample("查询该人员与示例科技有限公司的关联关系")'>关联关系</button>
+                            <button type="button" @onclick='() => UseExample("查询示例科技有限公司的印章信息")'>印章信息</button>
+                        </div>
+                    </div>
+                }
+
+                @foreach (var message in messages)
+                {
+                    <article class="message @message.Role">
+                        <div class="message-meta">@(message.Role == "user" ? "你" : "查询 Agent")</div>
+                        @if (message.Role == "assistant")
+                        {
+                            <div class="message-content markdown-content">@Markdown.Render(message.Content)</div>
+                        }
+                        else
+                        {
+                            <div class="message-content">@message.Content</div>
+                        }
+                    </article>
+                }
+
+                @if (streaming)
+                {
+                    <article class="message assistant streaming-message">
+                        <div class="message-meta">查询 Agent</div>
+                        @if (toolActivities.Count > 0)
+                        {
+                            <div class="evidence-status" aria-label="证据查询状态">
+                                @foreach (var tool in toolActivities)
+                                {
+                                    <div class="evidence-row @tool.Status">
+                                        <span class="evidence-indicator" aria-hidden="true"></span>
+                                        <span>@ToolLabel(tool.ToolName)</span>
+                                        <span>@StatusLabel(tool.Status)</span>
+                                    </div>
+                                }
+                            </div>
+                        }
+                        @if (!string.IsNullOrEmpty(streamedText))
+                        {
+                            <div class="message-content markdown-content">@Markdown.Render(streamedText)</div>
+                        }
+                        else
+                        {
+                            <div class="working-state"><span class="spinner" aria-hidden="true"></span><span>@stageText</span></div>
+                        }
+                    </article>
+                }
+
+                @if (canRetry)
+                {
+                    <div class="retry-row">
+                        <span>本轮未完成</span>
+                        <button class="quiet-command" type="button" @onclick="RetryAsync">重试</button>
+                    </div>
+                }
+                <div @ref="messageEnd"></div>
+            </section>
+
+            @if (activeConversationStatus == ConversationStatus.Active)
+            {
+                <footer class="composer-shell">
+                    <form class="composer" @onsubmit="SendAsync" @onsubmit:preventDefault>
+                        <label class="sr-only" for="query-message">输入查询问题</label>
+                        <textarea id="query-message" @bind="draft" @bind:event="oninput" maxlength="4000" rows="2"
+                                  placeholder="输入人员、企业、关系或印章查询…" disabled="@streaming"></textarea>
+                        <div class="composer-actions">
+                            <span class="character-count">@draft.Length / 4000</span>
+                            @if (streaming)
+                            {
+                                <button class="secondary-command" type="button" @onclick="CancelAsync">取消</button>
+                            }
+                            else
+                            {
+                                <button class="primary-command send-command" type="submit" disabled="@(string.IsNullOrWhiteSpace(draft) || busy)">发送</button>
+                            }
+                        </div>
+                    </form>
+                </footer>
+            }
+            else
+            {
+                <footer class="archived-footer">
+                    <span>已归档，只读</span>
+                    <button class="secondary-command" type="button" @onclick="RestoreConversationAsync" disabled="@busy">恢复会话</button>
+                </footer>
+            }
+        }
+    </main>
+</div>
+
+@code {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly List<ConversationView> conversations = [];
+    private readonly List<MessageView> messages = [];
+    private readonly List<ToolActivity> toolActivities = [];
+    private IJSObjectReference? module;
+    private DotNetObjectReference<Workbench>? selfReference;
+    private ElementReference messageEnd;
+    private Guid? activeConversationId;
+    private ConversationStatus conversationListStatus = ConversationStatus.Active;
+    private ConversationStatus activeConversationStatus = ConversationStatus.Active;
+    private string activeTitle = "查询会话";
+    private string draft = string.Empty;
+    private string lastPrompt = string.Empty;
+    private string streamedText = string.Empty;
+    private string stageText = "正在准备查询";
+    private string? errorMessage;
+    private bool loadingConversations = true;
+    private bool loadingConversation;
+    private bool streaming;
+    private bool busy;
+    private bool canRetry;
+    private bool railOpen;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/workbench.js");
+        selfReference = DotNetObjectReference.Create(this);
+        await module.InvokeVoidAsync("initialize", selfReference);
+    }
+
+    [JSInvokable]
+    public async Task ReceiveConversationsAsync(string json)
+    {
+        conversations.Clear();
+        conversations.AddRange(JsonSerializer.Deserialize<List<ConversationView>>(json, JsonOptions) ?? []);
+        loadingConversations = false;
+        busy = false;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task ReceiveConversationAsync(string json)
+    {
+        var snapshot = JsonSerializer.Deserialize<ConversationSnapshotView>(json, JsonOptions);
+        if (snapshot is null)
+        {
+            return;
+        }
+
+        activeConversationId = snapshot.Conversation.Id;
+        activeTitle = snapshot.Conversation.Title;
+        activeConversationStatus = ParseStatus(snapshot.Conversation.Status);
+        messages.Clear();
+        messages.AddRange(snapshot.Messages.OrderBy(value => value.SequenceNumber));
+        loadingConversation = false;
+        busy = false;
+        railOpen = false;
+        await InvokeAsync(StateHasChanged);
+        await ScrollToEndAsync();
+    }
+
+    [JSInvokable]
+    public async Task ReceiveCreatedConversationAsync(string json)
+    {
+        var created = JsonSerializer.Deserialize<ConversationView>(json, JsonOptions);
+        if (created is null || module is null)
+        {
+            return;
+        }
+
+        conversationListStatus = ConversationStatus.Active;
+        await module.InvokeVoidAsync("refreshConversations", "active");
+        await module.InvokeVoidAsync("loadConversation", created.Id);
+    }
+
+    [JSInvokable]
+    public async Task ReceiveStreamEventAsync(string eventName, string json)
+    {
+        using var payload = JsonDocument.Parse(json);
+        switch (eventName)
+        {
+            case "turn.started":
+                stageText = "正在分析查询条件";
+                break;
+            case "tool.started":
+                var startedTool = payload.RootElement.GetProperty("toolName").GetString() ?? "unknown";
+                toolActivities.Add(new ToolActivity(startedTool, "running"));
+                stageText = $"正在查询{ToolLabel(startedTool)}";
+                break;
+            case "tool.completed":
+                var completedTool = payload.RootElement.GetProperty("toolName").GetString() ?? "unknown";
+                var status = payload.RootElement.GetProperty("status").GetString() ?? "failed";
+                var index = toolActivities.FindLastIndex(value => value.ToolName == completedTool);
+                if (index >= 0)
+                {
+                    toolActivities[index] = new ToolActivity(completedTool, status);
+                }
+                break;
+            case "agent.text.delta":
+                streamedText += payload.RootElement.GetProperty("text").GetString() ?? string.Empty;
+                stageText = "正在整理查询结论";
+                break;
+            case "turn.completed":
+                streaming = false;
+                busy = false;
+                canRetry = false;
+                if (module is not null && activeConversationId is { } completedId)
+                {
+                    await module.InvokeVoidAsync("loadConversation", completedId);
+                    await module.InvokeVoidAsync("refreshConversations", StatusValue(conversationListStatus));
+                }
+                break;
+            case "turn.failed":
+                streaming = false;
+                busy = false;
+                canRetry = true;
+                errorMessage = ErrorMessage(payload.RootElement.TryGetProperty("errorCode", out var code) ? code.GetString() : null);
+                if (module is not null && activeConversationId is { } failedId)
+                {
+                    await module.InvokeVoidAsync("loadConversation", failedId);
+                    await module.InvokeVoidAsync("refreshConversations", StatusValue(conversationListStatus));
+                }
+                break;
+        }
+
+        await InvokeAsync(StateHasChanged);
+        await ScrollToEndAsync();
+    }
+
+    [JSInvokable]
+    public async Task ReceiveClientErrorAsync(string errorCode)
+    {
+        var wasStreaming = streaming;
+        streaming = false;
+        loadingConversations = false;
+        loadingConversation = false;
+        busy = false;
+        canRetry = wasStreaming && !string.IsNullOrWhiteSpace(lastPrompt);
+        errorMessage = ErrorMessage(errorCode);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task CreateConversationAsync()
+    {
+        if (module is null || busy)
+        {
+            return;
+        }
+
+        busy = true;
+        errorMessage = null;
+        conversationListStatus = ConversationStatus.Active;
+        await module.InvokeVoidAsync("createConversation", "新对话");
+    }
+
+    private async Task SelectConversationAsync(Guid id)
+    {
+        if (module is null || busy || streaming)
+        {
+            return;
+        }
+
+        loadingConversation = true;
+        activeConversationId = id;
+        messages.Clear();
+        errorMessage = null;
+        await module.InvokeVoidAsync("loadConversation", id);
+    }
+
+    private async Task ArchiveConversationAsync()
+    {
+        if (module is null || activeConversationId is not { } id || busy || streaming)
+        {
+            return;
+        }
+
+        busy = true;
+        errorMessage = null;
+        var succeeded = await module.InvokeAsync<bool>("archiveConversation", id);
+        if (succeeded)
+        {
+            ClearActiveConversation();
+            await module.InvokeVoidAsync("refreshConversations", "active");
+        }
+    }
+
+    private async Task RestoreConversationAsync()
+    {
+        if (module is null || activeConversationId is not { } id || busy || streaming)
+        {
+            return;
+        }
+
+        busy = true;
+        errorMessage = null;
+        var succeeded = await module.InvokeAsync<bool>("restoreConversation", id);
+        if (succeeded)
+        {
+            ClearActiveConversation();
+            await module.InvokeVoidAsync("refreshConversations", "archived");
+        }
+    }
+
+    private async Task ShowConversationListAsync(ConversationStatus status)
+    {
+        if (module is null || busy || streaming || conversationListStatus == status)
+        {
+            return;
+        }
+
+        conversationListStatus = status;
+        loadingConversations = true;
+        errorMessage = null;
+        ClearActiveConversation();
+        await module.InvokeVoidAsync("refreshConversations", StatusValue(status));
+    }
+
+    private async Task SendAsync()
+    {
+        if (module is null || activeConversationId is not { } id || activeConversationStatus != ConversationStatus.Active ||
+            streaming || string.IsNullOrWhiteSpace(draft))
+        {
+            return;
+        }
+
+        lastPrompt = draft.Trim();
+        if (messages.Count == 0)
+        {
+            activeTitle = Fadada.CertificationQueryAgent.Application.Conversations.ConversationTitle
+                .ForDisplay(lastPrompt);
+        }
+        messages.Add(new MessageView(Guid.NewGuid(), "user", lastPrompt, long.MaxValue, DateTimeOffset.UtcNow));
+        draft = string.Empty;
+        streamedText = string.Empty;
+        toolActivities.Clear();
+        errorMessage = null;
+        canRetry = false;
+        streaming = true;
+        busy = true;
+        stageText = "正在准备查询";
+        await module.InvokeVoidAsync("runTurn", id, lastPrompt);
+        await ScrollToEndAsync();
+    }
+
+    private Task RetryAsync()
+    {
+        draft = lastPrompt;
+        canRetry = false;
+        return SendAsync();
+    }
+
+    private async Task CancelAsync()
+    {
+        if (module is null)
+        {
+            return;
+        }
+
+        await module.InvokeVoidAsync("cancelTurn");
+        streaming = false;
+        busy = false;
+        canRetry = true;
+        errorMessage = "本轮查询已取消，可以重新发送。";
+    }
+
+    private async Task LogoutAsync()
+    {
+        if (module is not null)
+        {
+            await module.InvokeVoidAsync("logout");
+        }
+    }
+
+    private void UseExample(string value) => draft = value;
+    private void ToggleRail() => railOpen = !railOpen;
+    private void ClearError() => errorMessage = null;
+
+    private async Task ScrollToEndAsync()
+    {
+        if (module is not null)
+        {
+            await module.InvokeVoidAsync("scrollTo", messageEnd);
+        }
+    }
+
+    private static string ToolLabel(string toolName) => toolName switch
+    {
+        "query_person" => "人员证据",
+        "query_company" => "企业证据",
+        "query_relationship" => "关系证据",
+        "query_seals" => "印章证据",
+        _ => "领域证据"
+    };
+
+    private static string StatusLabel(string status) => status switch
+    {
+        "running" => "查询中",
+        "succeeded" => "已取得",
+        _ => "未取得"
+    };
+
+    private static string ErrorMessage(string? errorCode) => errorCode switch
+    {
+        "AUTH_SESSION_EXPIRED" => "登录状态已失效，请重新登录。",
+        "STORE_CONVERSATION_CONFLICT" => "会话刚刚发生变化，请刷新后重试。",
+        "CONVERSATION_STATE_CHANGED" => "会话状态已发生变化，请刷新后重试。",
+        "AGENT_CLIENT_CANCELLED" => "本轮查询已取消。",
+        "AGENT_MESSAGE_INVALID" => "查询内容为空或超过长度限制。",
+        "RATE_LIMITED" => "查询过于频繁，请稍后再试。",
+        _ => "查询未能完成，请稍后重试。"
+    };
+
+    private void ClearActiveConversation()
+    {
+        activeConversationId = null;
+        activeTitle = "查询会话";
+        activeConversationStatus = conversationListStatus;
+        messages.Clear();
+        draft = string.Empty;
+        canRetry = false;
+    }
+
+    private static ConversationStatus ParseStatus(string value) =>
+        Enum.TryParse<ConversationStatus>(value, ignoreCase: true, out var status) && Enum.IsDefined(status)
+            ? status
+            : ConversationStatus.Active;
+
+    private static string StatusValue(ConversationStatus status) => status.ToString().ToLowerInvariant();
+
+    private static string FormatTime(DateTimeOffset value)
+    {
+        var local = value.ToLocalTime();
+        return local.Date == DateTimeOffset.Now.Date ? local.ToString("HH:mm") : local.ToString("MM-dd");
+    }
+
+    private static string Initial(string? value) => string.IsNullOrWhiteSpace(value) ? "U" : value.Trim()[0].ToString().ToUpperInvariant();
+
+    public async ValueTask DisposeAsync()
+    {
+        if (module is not null)
+        {
+            try
+            {
+                await module.InvokeVoidAsync("dispose");
+                await module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+        selfReference?.Dispose();
+    }
+
+    private sealed record ConversationView(Guid Id, string Title, string Status, DateTimeOffset UpdatedAtUtc);
+    private sealed record MessageView(Guid Id, string Role, string Content, long SequenceNumber, DateTimeOffset CreatedAtUtc);
+    private sealed record ConversationSnapshotView(ConversationView Conversation, List<MessageView> Messages);
+    private sealed record ToolActivity(string ToolName, string Status);
+}
