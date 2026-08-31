@@ -46,7 +46,7 @@ Invoke-WebRequest https://127.0.0.1:<port>/health/ready -UseBasicParsing
 
 1. 固定版本并更新 ADR 或变更记录。
 2. 执行 locked restore、Release 零警告构建和全部默认离线测试。
-3. 执行当前 Agent 36 案例绝对门禁，要求 100% 通过和零安全违规。
+3. 执行当前 Agent 37 案例绝对门禁，要求 100% 通过和零安全违规。
 4. 如涉及本地 Lab，只执行显式批准的只读 readiness；插入型 probe 需另行授权。
 5. 在隔离环境验证发布包秘密扫描、登录、会话、SSE 和错误路径。
 6. 单实例回收应用池并观察 ready、审计完整性、错误率和资源使用。

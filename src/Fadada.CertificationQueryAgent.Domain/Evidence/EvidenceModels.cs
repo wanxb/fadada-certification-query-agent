@@ -140,14 +140,37 @@ public sealed record RelationshipEvidence(
     bool? AuxiliaryMobileMatches);
 
 /// <summary>
-/// 以规范化结构表达 SealEvidence，不允许外部提供方原始载荷直接成为领域事实。
+/// 表达可用于回答业务问题的印章授权用户，主动排除仅供系统关联的供应商账号标识。
+/// </summary>
+public sealed record SealAuthorizedUserEvidence(
+    string? UserName,
+    string? AreaCode,
+    string? Mobile,
+    string? Email,
+    string? AuthorizedAt,
+    string? ValidFrom,
+    string? ValidUntil,
+    int? UseTimes);
+
+/// <summary>
+/// 汇总单枚印章状态及授权证据，以总数和完整性标记防止有限模型上下文产生完整性误判。
 /// </summary>
 public sealed record SealEvidence(
     string SealId,
     string DisplayName,
     string Type,
     BusinessStatus Status,
-    bool? HasAuthorization);
+    bool? HasAuthorization,
+    IReadOnlyList<SealAuthorizedUserEvidence> AuthorizedUsers,
+    int? AuthorizedUserCount,
+    bool AuthorizedUsersComplete,
+    bool AuthorizedUsersTruncated)
+{
+    /// <summary>
+    /// 限制单枚印章进入模型上下文的授权用户数量，与通用工具结果清洗器的数组上限保持一致。
+    /// </summary>
+    public const int MaximumAuthorizedUsers = 100;
+}
 
 /// <summary>
 /// 以规范化结构表达 SealsEvidence，不允许外部提供方原始载荷直接成为领域事实。

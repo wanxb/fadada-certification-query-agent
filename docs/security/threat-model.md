@@ -60,6 +60,6 @@ Application --redacted telemetry--> OTLP collector
 ## 验证要求
 
 - 默认离线测试必须覆盖认证、CSRF、所有权、注入、工具 allowlist、审计失败关闭和安全输出。
-- 当前 Agent 36 案例门禁必须 100% 通过，安全违规和非法工具调用均为 0。
+- 当前 Agent 37 案例门禁必须 100% 通过，安全违规和非法工具调用均为 0。
 - 发布包不得包含 `appsettings.Local.json` 或任何已知真实秘密值。
 - 生产上线前必须重新进行目标环境威胁审查、渗透测试、秘密轮换演练和数据库恢复演练。

@@ -235,8 +235,9 @@ public sealed class FadadaIntegrationTests
     }
 
     [Fact]
-    public async Task SealAuthorization_IsDerivedFromReliableAccountId()
+    public async Task SealAuthorization_ExposesAuthorizedUsersAndRetainsReliableAccountIdMatching()
     {
+        // The fixture mirrors every documented authorizeUserInfoList field so mapping regressions remain observable end to end.
         var handler = new RecordingHandler((request, _) => Respond(request.RequestUri!.AbsolutePath switch
         {
             "/base/login/oauth2/accessToken" => """{"code":0,"data":{"accessToken":"synthetic-token","expiresIn":3600}}""",
@@ -245,7 +246,7 @@ public sealed class FadadaIntegrationTests
             "/user/api/account/getAccount" => """{"code":0,"data":{"accountId":"A-1","mobile":"13800000000","status":"active"}}""",
             "/user/api/verify/person/result" => """{"code":0,"data":{"accountId":"A-1","name":"测试甲","status":"verified"}}""",
             "/base/api/seal/get" => """{"code":0,"data":[{"sealId":"S-1","sealName":"测试公章","sealType":"公章","status":"active"}]}""",
-            "/base/api/seal/getSealInfo" => """{"code":0,"data":{"sealId":"S-1","sealName":"测试公章","sealType":"公章","status":"active","authorizeUserInfoList":[{"accountId":"A-1"}]}}""",
+            "/base/api/seal/getSealInfo" => """{"code":0,"data":{"sealId":"S-1","sealName":"测试公章","sealType":"公章","status":"active","authorizeUserInfoList":[{"accountId":"A-1","tpAccountId":"TP-1","userName":"测试甲","areaCode":"0","mobile":"13800000000","email":"test@example.invalid","createdDate":"2026-08-01 09:00:00","expiryDateBegin":"2026-08-01 00:00:00","expiryDateEnd":"2026-12-31 23:59:59","useTimes":4}]}}""",
             _ => throw new InvalidOperationException("Unexpected endpoint.")
         }));
         using var service = CreateService(handler, new RecordingAuditStore());
@@ -256,8 +257,139 @@ public sealed class FadadaIntegrationTests
             CancellationToken.None);
 
         Assert.Equal(EvidenceStatus.Succeeded, result.Status);
-        Assert.True(Assert.Single(result.Data!.Seals).HasAuthorization);
+        var seal = Assert.Single(result.Data!.Seals);
+        Assert.True(seal.HasAuthorization);
+        Assert.Equal(1, seal.AuthorizedUserCount);
+        Assert.True(seal.AuthorizedUsersComplete);
+        Assert.False(seal.AuthorizedUsersTruncated);
+        var authorizedUser = Assert.Single(seal.AuthorizedUsers);
+        Assert.Equal("测试甲", authorizedUser.UserName);
+        Assert.Equal("0", authorizedUser.AreaCode);
+        Assert.Equal("13800000000", authorizedUser.Mobile);
+        Assert.Equal("test@example.invalid", authorizedUser.Email);
+        Assert.Equal("2026-08-01 09:00:00", authorizedUser.AuthorizedAt);
+        Assert.Equal("2026-08-01 00:00:00", authorizedUser.ValidFrom);
+        Assert.Equal("2026-12-31 23:59:59", authorizedUser.ValidUntil);
+        Assert.Equal(4, authorizedUser.UseTimes);
         Assert.DoesNotContain(handler.Requests, request => request.Method != HttpMethod.Get && request.Path != "/base/login/oauth2/accessToken");
+    }
+
+    [Fact]
+    public async Task SealAuthorization_MalformedAuthorizedUsersDoNotThrowAndLegacyIdsStillMatch()
+    {
+        // Malformed collection members and numeric drift must degrade individual fields instead of failing the whole read-only query.
+        var handler = new RecordingHandler((request, _) => Respond(request.RequestUri!.AbsolutePath switch
+        {
+            "/base/login/oauth2/accessToken" => """{"code":0,"data":{"accessToken":"synthetic-token","expiresIn":3600}}""",
+            "/user/api/company/getCompany" => """{"code":0,"data":{"companyId":"C-1","companyName":"星河测试有限公司","status":"active"}}""",
+            "/user/api/verify/company/result" => """{"code":0,"data":{"companyId":"C-1","isCerdit":3}}""",
+            "/user/api/account/getAccount" => """{"code":0,"data":{"accountId":"A-4","mobile":"13800000004","status":"active"}}""",
+            "/user/api/verify/person/result" => """{"code":0,"data":{"accountId":"A-4","name":"测试丁","status":"verified"}}""",
+            "/base/api/seal/get" => """{"code":0,"data":[{"sealId":"S-1","sealName":"测试公章","sealType":"公章","status":"active"}]}""",
+            "/base/api/seal/getSealInfo" => """{"code":0,"data":{"sealId":"S-1","sealName":"测试公章","sealType":"公章","status":"active","permissionAccountIds":[null,42,"  A-4  "],"authorizeUserInfoList":[null,"invalid",{"userName":"  ","useTimes":{}},{"accountId":"A-2","userName":"测试乙","useTimes":2147483648},{"accountId":"A-3","userName":"测试丙","useTimes":"7"}]}}""",
+            _ => throw new InvalidOperationException("Unexpected endpoint.")
+        }));
+        using var service = CreateService(handler, new RecordingAuditStore());
+
+        var result = await service.QuerySealsAsync(
+            Context(),
+            new SealsQuery(CompanyFullName.Create("星河测试有限公司"), MobileNumber.Create("13800000004")),
+            CancellationToken.None);
+
+        Assert.Equal(EvidenceStatus.Partial, result.Status);
+        Assert.Equal(ConclusionStatus.Partial, result.Conclusion.Status);
+        var seal = Assert.Single(result.Data!.Seals);
+        Assert.True(seal.HasAuthorization);
+        Assert.Null(seal.AuthorizedUserCount);
+        Assert.False(seal.AuthorizedUsersComplete);
+        Assert.False(seal.AuthorizedUsersTruncated);
+        Assert.Equal(2, seal.AuthorizedUsers.Count);
+        Assert.Contains(seal.AuthorizedUsers, user => user.UserName == "测试乙" && user.UseTimes is null);
+        Assert.Contains(seal.AuthorizedUsers, user => user.UserName == "测试丙" && user.UseTimes == 7);
+        Assert.Contains("seal.authorizedUsers", result.MissingEvidence);
+    }
+
+    [Fact]
+    public async Task SealAuthorization_ExplicitEmptyAuthorizedUsersIsComplete()
+    {
+        var result = await QuerySealsWithDetailAsync(
+            """{"code":0,"data":{"sealId":"S-1","sealName":"测试公章","sealType":"公章","status":"active","authorizeUserInfoList":[]}}""");
+
+        Assert.Equal(EvidenceStatus.Succeeded, result.Status);
+        var seal = Assert.Single(result.Data!.Seals);
+        Assert.Empty(seal.AuthorizedUsers);
+        Assert.Equal(0, seal.AuthorizedUserCount);
+        Assert.True(seal.AuthorizedUsersComplete);
+        Assert.False(seal.AuthorizedUsersTruncated);
+        Assert.DoesNotContain("seal.authorizedUsers", result.MissingEvidence);
+    }
+
+    [Theory]
+    [InlineData("""{"code":0,"data":{"sealId":"S-1","sealName":"测试公章","sealType":"公章","status":"active"}}""")]
+    [InlineData("""{"code":0,"data":{"sealId":"S-1","sealName":"测试公章","sealType":"公章","status":"active","authorizeUserInfoList":{}}}""")]
+    public async Task SealAuthorization_MissingOrInvalidAuthorizedUsersIsPartialInsteadOfEmpty(string detailJson)
+    {
+        var result = await QuerySealsWithDetailAsync(detailJson);
+
+        Assert.Equal(EvidenceStatus.Partial, result.Status);
+        var seal = Assert.Single(result.Data!.Seals);
+        Assert.Empty(seal.AuthorizedUsers);
+        Assert.Null(seal.AuthorizedUserCount);
+        Assert.False(seal.AuthorizedUsersComplete);
+        Assert.False(seal.AuthorizedUsersTruncated);
+        Assert.Contains("seal.authorizedUsers", result.MissingEvidence);
+    }
+
+    [Fact]
+    public async Task SealAuthorization_MoreThanModelLimitPreservesTotalAndMarksTruncation()
+    {
+        // The provider total remains exact even though only the bounded prefix may enter model context.
+        var users = Enumerable.Range(1, SealEvidence.MaximumAuthorizedUsers + 1)
+            .Select(index => new { accountId = $"A-{index}", userName = $"测试用户{index}" })
+            .ToArray();
+        var detailJson = JsonSerializer.Serialize(new
+        {
+            code = 0,
+            data = new
+            {
+                sealId = "S-1",
+                sealName = "测试公章",
+                sealType = "公章",
+                status = "active",
+                authorizeUserInfoList = users
+            }
+        });
+
+        var result = await QuerySealsWithDetailAsync(detailJson);
+
+        Assert.Equal(EvidenceStatus.Partial, result.Status);
+        var seal = Assert.Single(result.Data!.Seals);
+        Assert.Equal(SealEvidence.MaximumAuthorizedUsers, seal.AuthorizedUsers.Count);
+        Assert.Equal(SealEvidence.MaximumAuthorizedUsers + 1, seal.AuthorizedUserCount);
+        Assert.False(seal.AuthorizedUsersComplete);
+        Assert.True(seal.AuthorizedUsersTruncated);
+        Assert.Equal("测试用户1", seal.AuthorizedUsers[0].UserName);
+        Assert.Equal("测试用户100", seal.AuthorizedUsers[^1].UserName);
+        Assert.Contains("seal.authorizedUsers.truncated", result.MissingEvidence);
+    }
+
+    // Exercises collection-quality boundaries without involving an optional person authorization branch.
+    private static async Task<EvidenceEnvelope<SealsEvidence>> QuerySealsWithDetailAsync(string detailJson)
+    {
+        var handler = new RecordingHandler((request, _) => Respond(request.RequestUri!.AbsolutePath switch
+        {
+            "/base/login/oauth2/accessToken" => """{"code":0,"data":{"accessToken":"synthetic-token","expiresIn":3600}}""",
+            "/user/api/company/getCompany" => """{"code":0,"data":{"companyId":"C-1","companyName":"星河测试有限公司","status":"active"}}""",
+            "/user/api/verify/company/result" => """{"code":0,"data":{"companyId":"C-1","isCerdit":3}}""",
+            "/base/api/seal/get" => """{"code":0,"data":[{"sealId":"S-1","sealName":"测试公章","sealType":"公章","status":"active"}]}""",
+            "/base/api/seal/getSealInfo" => detailJson,
+            _ => throw new InvalidOperationException("Unexpected endpoint.")
+        }));
+        using var service = CreateService(handler, new RecordingAuditStore());
+        return await service.QuerySealsAsync(
+            Context(),
+            new SealsQuery(CompanyFullName.Create("星河测试有限公司"), null),
+            CancellationToken.None);
     }
 
     private static FadadaDomainQueryService CreateService(HttpMessageHandler handler, IAuditStore auditStore) => new(

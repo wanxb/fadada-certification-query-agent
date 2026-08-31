@@ -1,4 +1,5 @@
 // Parses provider envelopes defensively while retaining only fields required for normalized evidence.
+using System.Globalization;
 using System.Text.Json;
 using Fadada.CertificationQueryAgent.Domain.Evidence;
 
@@ -41,6 +42,12 @@ internal static class FadadaJson
 
     public static string? GetString(JsonElement element, params string[] names)
     {
+        // Provider arrays may contain malformed entries; treating non-objects as absent avoids leaking schema drift as runtime exceptions.
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
         foreach (var name in names)
         {
             if (!element.TryGetProperty(name, out var value))
@@ -106,7 +113,67 @@ internal static class FadadaJson
             : new AdministratorRecord(accountId, administratorName, mobile);
     }
 
-    public static IReadOnlyList<string> PermissionAccountIds(JsonElement element)
+    public static SealAuthorizedUserCollection AuthorizedUsers(JsonElement element)
+    {
+        var users = new List<SealAuthorizedUserRecord>();
+        var seenUsers = new HashSet<SealAuthorizedUserRecord>();
+        var listFound = false;
+        var isComplete = true;
+        foreach (var name in new[] { "permissions", "permissionAccounts", "authorizedAccounts", "authorizeUserInfoList", "authorizedUserInfoList" })
+        {
+            if (!element.TryGetProperty(name, out var values))
+            {
+                continue;
+            }
+
+            listFound = true;
+            if (values.ValueKind != JsonValueKind.Array)
+            {
+                isComplete = false;
+                continue;
+            }
+
+            foreach (var value in values.EnumerateArray())
+            {
+                if (value.ValueKind != JsonValueKind.Object)
+                {
+                    isComplete = false;
+                    continue;
+                }
+
+                // Authorization dates remain strings because the provider contract does not guarantee one parseable date format.
+                var userFieldsValid = true;
+                var (useTimes, useTimesValid) = GetNullableInt(value, "useTimes");
+                var user = new SealAuthorizedUserRecord(
+                    GetAuthorizedUserString(value, ref userFieldsValid, "accountId", "account_id", "id"),
+                    GetAuthorizedUserString(value, ref userFieldsValid, "tpAccountId", "thirdPartyAccountId", "tp_account_id"),
+                    GetAuthorizedUserString(value, ref userFieldsValid, "userName", "name"),
+                    GetAuthorizedUserString(value, ref userFieldsValid, "areaCode", "area_code"),
+                    GetAuthorizedUserString(value, ref userFieldsValid, "mobile", "phone"),
+                    GetAuthorizedUserString(value, ref userFieldsValid, "email"),
+                    GetAuthorizedUserString(value, ref userFieldsValid, "createdDate", "authorizedAt"),
+                    GetAuthorizedUserString(value, ref userFieldsValid, "expiryDateBegin", "validFrom"),
+                    GetAuthorizedUserString(value, ref userFieldsValid, "expiryDateEnd", "validUntil"),
+                    useTimes);
+                isComplete &= userFieldsValid && useTimesValid;
+                // Preserve provider order for stable answers while suppressing duplicate aliases or repeated entries.
+                if (IsEmpty(user))
+                {
+                    isComplete = false;
+                }
+                else if (seenUsers.Add(user))
+                {
+                    users.Add(user);
+                }
+            }
+        }
+
+        return new SealAuthorizedUserCollection(users.ToArray(), listFound && isComplete);
+    }
+
+    public static IReadOnlyList<string> PermissionAccountIds(
+        JsonElement element,
+        IReadOnlyList<SealAuthorizedUserRecord> authorizedUsers)
     {
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var name in new[] { "permissionAccountIds", "accountIds", "permission_account_ids" })
@@ -115,26 +182,19 @@ internal static class FadadaJson
             {
                 foreach (var value in values.EnumerateArray())
                 {
-                    if (value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()))
+                    if (value.ValueKind == JsonValueKind.String && Clean(value.GetString()) is { } id)
                     {
-                        ids.Add(value.GetString()!);
+                        ids.Add(id);
                     }
                 }
             }
         }
 
-        foreach (var name in new[] { "permissions", "permissionAccounts", "authorizedAccounts", "authorizeUserInfoList", "authorizedUserInfoList" })
+        foreach (var user in authorizedUsers)
         {
-            if (element.TryGetProperty(name, out var values) && values.ValueKind == JsonValueKind.Array)
+            if (user.AccountId is { } accountId)
             {
-                foreach (var value in values.EnumerateArray())
-                {
-                    var id = GetString(value, "accountId", "account_id", "id");
-                    if (!string.IsNullOrWhiteSpace(id))
-                    {
-                        ids.Add(id);
-                    }
-                }
+                ids.Add(accountId);
             }
         }
 
@@ -149,4 +209,62 @@ internal static class FadadaJson
 
     private static string? Clean(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string? GetAuthorizedUserString(
+        JsonElement element,
+        ref bool isValid,
+        params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!element.TryGetProperty(name, out var value))
+            {
+                continue;
+            }
+
+            // Scalar drift remains representable, but nested values indicate a damaged user entry that must surface as partial evidence.
+            if (value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+            {
+                isValid = false;
+                return null;
+            }
+
+            return Clean(GetString(element, name));
+        }
+
+        return null;
+    }
+
+    private static (int? Value, bool IsValid) GetNullableInt(JsonElement element, string name)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(name, out var value))
+        {
+            return (null, true);
+        }
+
+        // Numeric strings are accepted for compatibility, while invalid or overflowing values safely become unknown.
+        return value.ValueKind switch
+        {
+            JsonValueKind.Null or JsonValueKind.Undefined => (null, true),
+            JsonValueKind.Number when value.TryGetInt32(out var number) => (number, true),
+            JsonValueKind.String when int.TryParse(
+                value.GetString(),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var number) => (number, true),
+            _ => (null, false)
+        };
+    }
+
+    private static bool IsEmpty(SealAuthorizedUserRecord user) =>
+        user.AccountId is null &&
+        user.ThirdPartyAccountId is null &&
+        user.UserName is null &&
+        user.AreaCode is null &&
+        user.Mobile is null &&
+        user.Email is null &&
+        user.AuthorizedAt is null &&
+        user.ValidFrom is null &&
+        user.ValidUntil is null &&
+        user.UseTimes is null;
 }

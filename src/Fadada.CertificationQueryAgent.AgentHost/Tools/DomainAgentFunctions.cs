@@ -32,7 +32,7 @@ internal sealed class DomainAgentFunctions(IToolPolicyPipeline policyPipeline)
         Create(
             (Func<string, string?, CancellationToken, ValueTask<string>>)QuerySealsAsync,
             "query_seals",
-            "Query company seals and optional person authorization evidence.")
+            "Query company seals, each seal's authorized users, and optional authorization evidence for one mobile number.")
     ];
 
     private static AIFunction Create(Delegate method, string name, string description)

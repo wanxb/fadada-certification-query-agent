@@ -38,7 +38,7 @@ public static class DomainToolRegistry
                 new ToolArgumentDefinition("mobile", ProvenanceFieldKind.Mobile, true),
                 new ToolArgumentDefinition("companyFullName", ProvenanceFieldKind.CompanyFullName, true),
                 new ToolArgumentDefinition("claimedName", ProvenanceFieldKind.PersonName, false)),
-            Define("query_seals", "Query company seals and optional person authorization evidence.",
+            Define("query_seals", "Query company seals, each seal's authorized users, and optional authorization evidence for one mobile number.",
                 new ToolArgumentDefinition("companyFullName", ProvenanceFieldKind.CompanyFullName, true),
                 new ToolArgumentDefinition("mobile", ProvenanceFieldKind.Mobile, false))
         }.ToFrozenDictionary(tool => tool.Name, StringComparer.Ordinal);

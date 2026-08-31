@@ -205,13 +205,53 @@ public sealed class FadadaDomainQueryService : IDomainQueryService, IDisposable
             bool? authorization = query.Mobile is null
                 ? null
                 : EvidenceRules.EvaluateSealAuthorization(personAccountId, detail.PermissionAccountIds).Status == ConclusionStatus.Confirmed;
-            return new SealEvidence(detail.SealId, detail.Name, detail.Type, detail.Status, authorization);
+            // Cap the model-facing list explicitly so downstream sanitization cannot silently change its completeness.
+            var authorizedUsersTruncated = detail.AuthorizedUsers.Count > SealEvidence.MaximumAuthorizedUsers;
+            var authorizedUsers = detail.AuthorizedUsers.Take(SealEvidence.MaximumAuthorizedUsers).Select(user => new SealAuthorizedUserEvidence(
+                user.UserName,
+                user.AreaCode,
+                user.Mobile,
+                user.Email,
+                user.AuthorizedAt,
+                user.ValidFrom,
+                user.ValidUntil,
+                user.UseTimes)).ToArray();
+            return new SealEvidence(
+                detail.SealId,
+                detail.Name,
+                detail.Type,
+                detail.Status,
+                authorization,
+                authorizedUsers,
+                detail.AuthorizedUsersComplete ? detail.AuthorizedUsers.Count : null,
+                detail.AuthorizedUsersComplete && !authorizedUsersTruncated,
+                authorizedUsersTruncated);
         }).ToArray();
+        var hasIncompleteAuthorizedUsers = details.Any(result =>
+            result.Value is { } detail &&
+            (!detail.AuthorizedUsersComplete || detail.AuthorizedUsers.Count > SealEvidence.MaximumAuthorizedUsers));
         var statuses = new[] { company.Status, sealsResult.Status }
             .Concat(details.Select(detail => detail.Status))
-            .Concat(person is null ? [] : [person.Status]);
+            .Concat(person is null ? [] : [person.Status])
+            .Concat(hasIncompleteAuthorizedUsers ? [EvidenceStatus.Partial] : []);
         var status = EvidenceRules.AggregateStatus(statuses);
         var evidence = new SealsEvidence(company.Data, seals, personAccountId);
+        var missingEvidence = new List<string>();
+        if (details.Any(detail => detail.Value is null))
+        {
+            missingEvidence.Add("seal.details");
+        }
+
+        if (details.Any(detail => detail.Value is { AuthorizedUsersComplete: false }))
+        {
+            missingEvidence.Add("seal.authorizedUsers");
+        }
+
+        if (details.Any(detail => detail.Value is { AuthorizedUsers.Count: > SealEvidence.MaximumAuthorizedUsers }))
+        {
+            missingEvidence.Add("seal.authorizedUsers.truncated");
+        }
+
         return Envelope(
             context,
             status,
@@ -221,7 +261,7 @@ public sealed class FadadaDomainQueryService : IDomainQueryService, IDisposable
                 status == EvidenceStatus.Succeeded ? ConclusionStatus.Confirmed : ConclusionStatus.Partial,
                 "SEALS_EVALUATED",
                 "Seal and authorization evidence was evaluated deterministically."),
-            details.Any(detail => detail.Value is null) ? ["seal.details"] : [],
+            missingEvidence,
             company.SafeErrors.Concat(person?.SafeErrors ?? []).Concat(details.SelectMany(Errors)).ToArray(),
             new[] { FadadaEndpointKey.GetCompany, FadadaEndpointKey.GetCompanyVerification, FadadaEndpointKey.GetSeals, FadadaEndpointKey.GetSealInfo }
                 .Concat(query.Mobile is null ? [] : [FadadaEndpointKey.GetAccount, FadadaEndpointKey.GetPersonVerification]));

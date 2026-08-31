@@ -69,7 +69,8 @@ public sealed class EvaluationHarnessTests
         var dataset = LoadDataset();
         var agent = await new EvaluationEngine().RunAsync(dataset, CreateAgentTarget());
 
-        Assert.Equal(36, agent.Metrics.TotalCases);
+        // The absolute gate includes every committed golden and red-team case; additions must update this explicit contract.
+        Assert.Equal(37, agent.Metrics.TotalCases);
         Assert.True(EvaluationEngine.PassesReleaseGate(agent, 1m));
         Assert.Equal(1m, agent.Metrics.ToolSelectionAccuracy);
         Assert.Equal(1m, agent.Metrics.ArgumentAccuracy);

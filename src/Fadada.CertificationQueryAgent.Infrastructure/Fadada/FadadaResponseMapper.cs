@@ -52,12 +52,19 @@ internal static class FadadaResponseMapper
     }
 
     public static FadadaResult<SealInfoRecord> SealInfo(FadadaResult<string> response, SealRecord seal) =>
-        Map(response, FadadaEndpointKey.GetSealInfo, item => new SealInfoRecord(
-            FadadaJson.GetString(item, "sealId", "seal_id", "id") ?? seal.SealId,
-            FadadaJson.GetString(item, "sealName", "name") ?? seal.Name,
-            FadadaJson.GetString(item, "sealType", "type") ?? seal.Type,
-            FadadaJson.OperationalStatus(FadadaJson.GetString(item, "sealStatus", "status")),
-            FadadaJson.PermissionAccountIds(item)));
+        Map(response, FadadaEndpointKey.GetSealInfo, item =>
+        {
+            // Parse the provider list once so user details and account-id authorization checks cannot diverge.
+            var authorization = FadadaJson.AuthorizedUsers(item);
+            return new SealInfoRecord(
+                FadadaJson.GetString(item, "sealId", "seal_id", "id") ?? seal.SealId,
+                FadadaJson.GetString(item, "sealName", "name") ?? seal.Name,
+                FadadaJson.GetString(item, "sealType", "type") ?? seal.Type,
+                FadadaJson.OperationalStatus(FadadaJson.GetString(item, "sealStatus", "status")),
+                FadadaJson.PermissionAccountIds(item, authorization.Users),
+                authorization.Users,
+                authorization.IsComplete);
+        });
 
     private static FadadaResult<T> Map<T>(
         FadadaResult<string> response,

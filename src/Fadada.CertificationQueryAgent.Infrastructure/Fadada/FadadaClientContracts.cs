@@ -49,14 +49,38 @@ internal sealed record CompanyRecord(
 internal sealed record SealRecord(string SealId, string Name, string Type, BusinessStatus Status);
 
 /// <summary>
-/// 表示 SealInfoRecord 的基础设施传输形状，仅用于适配外部数据且不作为应用层契约。
+/// 规范化法大大印章授权用户信息，隔离供应商字段别名与不稳定的日期格式。
+/// </summary>
+internal sealed record SealAuthorizedUserRecord(
+    string? AccountId,
+    string? ThirdPartyAccountId,
+    string? UserName,
+    string? AreaCode,
+    string? Mobile,
+    string? Email,
+    string? AuthorizedAt,
+    string? ValidFrom,
+    string? ValidUntil,
+    int? UseTimes);
+
+/// <summary>
+/// 承载授权用户解析结果并记录集合是否完整，使字段缺失或脏数据不会被误判为合法空列表。
+/// </summary>
+internal sealed record SealAuthorizedUserCollection(
+    IReadOnlyList<SealAuthorizedUserRecord> Users,
+    bool IsComplete);
+
+/// <summary>
+/// 汇总印章详情及授权用户，保留列表完整性和旧版账号标识以支持可靠的上层结论。
 /// </summary>
 internal sealed record SealInfoRecord(
     string SealId,
     string Name,
     string Type,
     BusinessStatus Status,
-    IReadOnlyList<string> PermissionAccountIds);
+    IReadOnlyList<string> PermissionAccountIds,
+    IReadOnlyList<SealAuthorizedUserRecord> AuthorizedUsers,
+    bool AuthorizedUsersComplete);
 
 /// <summary>
 /// 定义 IFadadaTokenProvider 的稳定端口，使应用逻辑不依赖具体基础设施并便于替换测试实现。
